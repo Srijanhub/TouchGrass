@@ -101,12 +101,26 @@ function hourFit(h) {
   return +(precip * (0.65 * temp + 0.35 * wind)).toFixed(3);
 }
 
+class ServiceError extends Error { constructor(service, detail) { super(service); this.service = service; this.detail = detail; } }
+// Every network call goes through here so a failure names the service and the real cause.
+async function getJson(service, url, opts = {}, ms = 15000) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { ...opts, signal: ctl.signal });
+    if (!r.ok) throw new ServiceError(service, `HTTP ${r.status}`);
+    return await r.json();
+  } catch (e) {
+    if (e instanceof ServiceError) throw e;
+    throw new ServiceError(service, e.name === 'AbortError' ? 'timed out' : `${e.name}: ${e.message}`);
+  } finally { clearTimeout(timer); }
+}
+
 async function fetchWeather(lat, lon) {
   lat = +lat.toFixed(2); lon = +lon.toFixed(2); // ~1 km before it leaves the browser
   const u = new URL('https://api.open-meteo.com/v1/forecast');
   u.search = new URLSearchParams({ latitude: lat, longitude: lon, hourly: 'temperature_2m,precipitation_probability,weather_code,wind_speed_10m,is_day', forecast_days: 2, timezone: 'auto', wind_speed_unit: 'kmh' });
-  const r = await fetch(u); if (!r.ok) throw new Error('weather');
-  const d = await r.json(), h = d.hourly;
+  const d = await getJson('weather', u), h = d.hourly;
+  if (!h || !h.time) throw new ServiceError('weather', 'unexpected response');
   return {
     now: Date.now() + (d.utc_offset_seconds || 0) * 1000,
     hours: h.time.map((t, i) => ({ t: Date.parse(t + 'Z'), temp: h.temperature_2m[i] ?? 15, precip: h.precipitation_probability[i] ?? 0, wind: h.wind_speed_10m[i] ?? 0, code: h.weather_code[i] ?? 0, isDay: !!h.is_day[i] })),
@@ -170,13 +184,17 @@ function parseOverpass(els) {
   }
   return [...out.values()];
 }
+const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
 async function fetchPlaces(lat, lon, radiusM) {
   lat = +lat.toFixed(3); lon = +lon.toFixed(3);
   const a = `(around:${radiusM},${lat},${lon})`;
   const q = `[out:json][timeout:20];(nwr["leisure"~"^(park|nature_reserve|garden)$"]["name"]${a};nwr["tourism"="viewpoint"]${a};nwr["natural"~"^(water|beach|peak)$"]["name"]${a};nwr["waterway"="waterfall"]${a};);out center 80;`;
-  const r = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', body: new URLSearchParams({ data: q }) });
-  if (!r.ok) throw new Error('places');
-  return parseOverpass((await r.json()).elements || []);
+  let last; // the public server is often busy, so fall back to a mirror
+  for (const ep of OVERPASS) {
+    try { const d = await getJson('places', ep, { method: 'POST', body: new URLSearchParams({ data: q }) }, 25000); return parseOverpass(d.elements || []); }
+    catch (e) { last = e; }
+  }
+  throw last;
 }
 const MOCK_PLACES = [
   ['Willow Pond Reserve', 'nature_reserve', 0, 2.0], ['Central Green', 'park', 90, 1.2], ['Old Quarry Viewpoint', 'viewpoint', 45, 3.5],
@@ -337,14 +355,15 @@ function getDeviceLocation() {
 }
 
 async function refresh() {
-  Object.assign(S, { status: 'loading', err: null, started: false, fbDone: false, sel: 0 }); render();
+  Object.assign(S, { status: 'loading', err: null, diag: null, started: false, fbDone: false, sel: 0 }); render();
   try {
     const loc = S.demo ? DEMO_LOC : prefs.manual ? { lat: prefs.manual.lat, lon: prefs.manual.lon } : await getDeviceLocation();
     S.rec = await recommend(loc, prefs, hist, S.demo); S.status = 'ready';
   } catch (e) {
-    S.status = 'error';
-    S.err = e && e.message && !(e instanceof Error) ? e.message : (e?.message === 'weather' ? "The weather service didn't answer." : e?.message === 'places' ? "Nearby places didn't load. The public map server may be busy." : 'Something went wrong. Check your connection.');
-    S.errLoc = e && e.code ? true : false;
+    S.status = 'error'; S.errLoc = false; S.detail = null;
+    if (e instanceof ServiceError) { S.err = `Couldn't reach the ${e.service} service.`; S.detail = e.detail; }
+    else if (e && e.code) { S.err = e.message; S.errLoc = true; }
+    else { S.err = 'Something unexpected went wrong.'; S.detail = `${e && e.name}: ${e && e.message}`; console.error(e); }
   }
   render();
 }
@@ -385,8 +404,8 @@ function strip(wx) {
 
 function viewToday() {
   if (S.status === 'idle' || S.status === 'loading') return `<div class="center"><div class="spin"></div><h2>Reading the sky</h2><p>Checking the weather and what is nearby.</p></div>`;
-  if (S.status === 'error') return `<div class="center"><h2>${S.errLoc ? 'Location needed' : "Couldn't load today"}</h2><p>${esc(S.err)}</p>
-    <div style="max-width:320px;margin:24px auto 0"><button class="primary" data-act="refresh">Try again</button><button data-act="demo">Try demo data</button>${S.errLoc ? '<button data-act="tab" data-v="settings">Search for a place</button>' : ''}</div></div>`;
+  if (S.status === 'error') return `<div class="center"><h2>${S.errLoc ? 'Location needed' : "Couldn't load today"}</h2><p>${esc(S.err)}</p>${S.detail ? `<p class="muted">Details: ${esc(S.detail)}</p>` : ''}${S.diag ? `<pre class="muted" style="text-align:left;white-space:pre-wrap;max-width:420px;margin:16px auto">${esc(S.diag.join('\n'))}</pre>` : ''}
+    <div style="max-width:320px;margin:24px auto 0"><button class="primary" data-act="refresh">Try again</button><button data-act="diag">Check services</button><button data-act="demo">Try demo data</button>${S.errLoc ? '<button data-act="tab" data-v="settings">Search for a place</button>' : ''}</div></div>`;
   const r = S.rec;
   const demoNote = S.demo ? `<p class="muted">Demo data: made-up places, not your area. <a href="#" data-act="exitdemo" style="color:inherit">Use real data</a></p>` : '';
   if (r.mode === 'outdoor') {
@@ -494,6 +513,14 @@ document.addEventListener('click', async e => {
     case 'finish': prefs = { ...draft, manual: prefs.manual, onboarded: true }; savePrefs(); S.tab = 'today'; return refresh();
     case 'tab': S.tab = v; S.overlay = null; if (v === 'settings') draft = { ...prefs }; return render();
     case 'refresh': return refresh();
+    case 'diag': {
+      S.diag = ['Checking…']; render(); const res = [];
+      const t = async (name, fn) => { const t0 = performance.now(); try { await fn(); res.push(`${name}: OK (${Math.round(performance.now() - t0)} ms)`); } catch (er) { res.push(`${name}: FAILED, ${er.detail || er.message}`); } };
+      await t('Weather', () => getJson('weather', 'https://api.open-meteo.com/v1/forecast?latitude=0&longitude=0&hourly=temperature_2m&forecast_days=1', {}, 10000));
+      await t('Places', () => getJson('places', OVERPASS[0], { method: 'POST', body: new URLSearchParams({ data: '[out:json][timeout:5];node(1);out;' }) }, 10000));
+      await t('Routing', () => getJson('routing', `${ROUTE_URL.walking}/route/v1/driving/13.40,52.50;13.41,52.51?overview=false`, {}, 10000));
+      S.diag = res; return render();
+    }
     case 'demo': S.demo = true; return refresh();
     case 'exitdemo': S.demo = false; return refresh();
     case 'details': S.detail = +v; S.overlay = 'details'; return render();

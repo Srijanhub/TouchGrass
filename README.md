@@ -5,7 +5,9 @@ Static site: no server, no build step, no API keys. Preferences and history stay
 
 ```
 public/index.html   the whole app
-test-site.js        end-to-end test in a simulated browser (npm test)
+api/places.js       Vercel serverless proxy for nearby places (Vercel only)
+test-site.js        end-to-end test in a simulated browser
+test-api.js         tests for the proxy function (npm test runs both)
 vercel.json         Vercel config (serves /public, adds security headers)
 .github/workflows/  GitHub Pages deploy (tests first, then publish)
 ```
@@ -29,6 +31,12 @@ Every push to `main` redeploys automatically.
 3. Push again (or run the workflow from the Actions tab). The site appears at `https://<user>.github.io/<repo>/`.
 
 Both are HTTPS, which browsers require for location. If a visitor blocks location they can search for a place in Settings.
+
+## Why there is a places proxy
+The free Overpass servers that supply nearby places are shared, rate-limited, and unreachable from some networks.
+On Vercel the site asks `/api/places` first: the server fetches places (trying four Overpass servers), caches the answer for an hour, and the browser only talks to your own domain.
+On GitHub Pages or localhost there is no `/api`, so the browser falls back to calling the Overpass servers directly. If your network blocks them, use Vercel.
+Press **Check services** on the error screen to see which part is failing.
 
 ## Notes
 - Weather: Open-Meteo. Places: OpenStreetMap Overpass. Routes: routing.openstreetmap.de. Tiles: openstreetmap.org. All free and key-less; the public servers are rate-limited, so self-host them for heavy traffic.

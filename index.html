@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TouchGrass</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌿</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root{--lichen:#eaf0e6;--paper:#f7faf5;--fir:#1c2b26;--moss:#35684b;--tarn:#4b7b8c;--gravel:#c5cfc1;--lamp:#e0a93b;--err:#a23b2a;
+  --serif:"Iowan Old Style","Palatino Linotype",Georgia,"Noto Serif",serif;--sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--lichen:#16201c;--paper:#1e2b26;--fir:#e6eee2;--moss:#6fb08a;--tarn:#7fb0c0;--gravel:#34443d;--lamp:#e8b64f;--err:#e58a79}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--lichen);color:var(--fir);font:16px/1.5 var(--sans)}
+body{min-height:100vh}
+main{max-width:640px;margin:0 auto;padding:20px 20px 96px}
+h1,h2{font-family:var(--serif);font-weight:600;line-height:1.2;margin:0}
+h1{font-size:clamp(28px,6vw,36px)}h2{font-size:24px}
+h3{font-size:16px;margin:0 0 6px}
+p{margin:0 0 12px}.muted{opacity:.65;font-size:14px}.err{color:var(--err)}
+.panel{background:var(--paper);border:1px solid var(--gravel);border-radius:16px;padding:16px;margin:16px 0}
+.stats{display:flex;gap:12px}.stats div{flex:1}.stats b{display:block;font-size:16px}.stats span{font-size:13px;opacity:.65}
+button,.btn{font:inherit;cursor:pointer;border-radius:14px;min-height:48px;padding:0 20px;border:1px solid var(--gravel);background:transparent;color:var(--fir);width:100%}
+button.primary{background:var(--moss);color:#fff;border-color:var(--moss);font-weight:600}
+:root[data-theme=dark] button.primary,button.primary{color:#fff}
+button:focus-visible,input:focus-visible,.chip:focus-visible{outline:3px solid var(--lamp);outline-offset:2px}
+button:disabled{opacity:.45;cursor:not-allowed}
+button+button{margin-top:8px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.chip{border:1px solid var(--gravel);border-radius:10px;padding:8px 14px;background:transparent;color:var(--fir);width:auto;min-height:40px;font-size:14px}
+.chip.on{background:var(--moss);color:#fff;border-color:var(--moss)}
+input[type=range]{width:100%;accent-color:var(--moss)}
+input[type=text]{font:inherit;width:100%;min-height:44px;padding:0 12px;border-radius:12px;border:1px solid var(--gravel);background:var(--paper);color:var(--fir)}
+label{display:block;font-weight:600;margin:16px 0 4px}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--paper);border-top:1px solid var(--gravel);padding-bottom:env(safe-area-inset-bottom,0px)}
+nav button{border:0;border-radius:0;min-height:56px;flex:1;margin:0!important;font-size:13px}
+nav button[aria-current=page]{color:var(--moss);font-weight:700;box-shadow:inset 0 3px 0 var(--moss)}
+.strip{display:flex;align-items:flex-end;gap:3px;height:64px}
+.strip i{flex:1;border-radius:4px;background:var(--gravel);min-height:8px}.strip i.ok{background:var(--moss);opacity:.6}.strip i.win{background:var(--lamp);opacity:1}
+.strip-l{display:flex;justify-content:space-between;font-size:13px;margin-top:6px}.strip-l b{font-size:15px}
+.map{height:280px;border-radius:16px;border:1px solid var(--gravel);overflow:hidden;background:var(--paper)}
+.center{text-align:center;padding:64px 12px}
+.spin{width:36px;height:36px;border:4px solid var(--gravel);border-top-color:var(--moss);border-radius:50%;margin:0 auto 20px;animation:s 1s linear infinite}
+@keyframes s{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.spin{animation:none}}
+ol.steps{margin:0;padding-left:22px}ol.steps li{margin-bottom:8px}
+.row{display:flex;gap:12px;align-items:center}.row>*{flex:1}
+.hist{display:flex;justify-content:space-between;gap:12px}
+.rate{display:flex;gap:6px}.rate button{width:52px;padding:0;font-size:22px;min-height:52px}.rate button.on{background:var(--moss);border-color:var(--moss)}
+.back{width:auto;min-height:40px;padding:0 14px;margin-bottom:12px}
+</style>
+</head>
+<body>
+<main id="app" aria-live="polite"></main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+"use strict";
+/* ───────── helpers ───────── */
+const HOUR = 3600e3, DAY = 86400e3;
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const cap = s => s[0].toUpperCase() + s.slice(1);
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const store = {
+  get(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+function haversine(a, b, c, d) {
+  const r = Math.PI / 180, dp = (c - a) * r, dl = (d - b) * r;
+  const x = Math.sin(dp / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin(dl / 2) ** 2;
+  return 2 * 6371.0088 * Math.asin(Math.sqrt(x));
+}
+function offsetPoint(lat, lon, bearing, km) {
+  const r = Math.PI / 180, b = bearing * r, d = km / 6371.0088, p1 = lat * r, l1 = lon * r;
+  const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(b));
+  const l2 = l1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
+  return [p2 / r, l2 / r];
+}
+// Times are "naive local" milliseconds (local wall-clock expressed as if UTC), so the viewer's own timezone never leaks in.
+const hh = ms => new Date(ms).getUTCHours(), mm = ms => new Date(ms).getUTCMinutes();
+const fmtT = ms => `${hh(ms) % 12 || 12}:${String(mm(ms)).padStart(2, '0')}`;
+const ampm = ms => hh(ms) < 12 ? 'AM' : 'PM';
+const fmtWin = (a, b) => ampm(a) === ampm(b) ? `${fmtT(a)}–${fmtT(b)} ${ampm(b)}` : `${fmtT(a)} ${ampm(a)}–${fmtT(b)} ${ampm(b)}`;
+const fmtDur = m => { m = Math.round(m); return m < 60 ? `${m} min` : (m % 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m / 60} h`); };
+const fmtKm = k => k < 10 ? `${k.toFixed(1)} km` : `${Math.round(k)} km`;
+const andJoin = a => a.length <= 1 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
+const MODE_WORD = { walking: 'On foot', cycling: 'By bike', driving: 'By car' };
+const MODE_PHRASE = { walking: 'on foot', cycling: 'by bike', driving: 'by car' };
+
+/* ───────── weather ───────── */
+const RAIN = new Set([...Array(17).keys()].map(i => i + 51).concat([...Array(7).keys()].map(i => i + 71), [...Array(7).keys()].map(i => i + 80)));
+const CONDITIONS = [[0, 'clear'], [3, 'partly cloudy'], [48, 'foggy'], [57, 'drizzly'], [67, 'rainy'], [77, 'snowy'], [82, 'showery'], [86, 'snow showers'], [99, 'stormy']];
+const condText = c => (CONDITIONS.find(([u]) => c <= u) || [0, 'mixed'])[1];
+const ramp = (x, z, o) => o === z ? 1 : clamp((x - z) / (o - z));
+
+function hourFit(h) {
+  if (!h.isDay || h.code >= 95) return 0;
+  const temp = h.temp >= 22 ? (h.temp > 28 ? ramp(h.temp, 40, 28) : 1) : (h.temp < 14 ? ramp(h.temp, 2, 14) : 1);
+  const wind = ramp(h.wind, 50, 15);
+  let precip = 1 - h.precip / 100;
+  if (RAIN.has(h.code)) precip *= 0.4;
+  return +(precip * (0.65 * temp + 0.35 * wind)).toFixed(3);
+}
+
+async function fetchWeather(lat, lon) {
+  lat = +lat.toFixed(2); lon = +lon.toFixed(2); // ~1 km before it leaves the browser
+  const u = new URL('https://api.open-meteo.com/v1/forecast');
+  u.search = new URLSearchParams({ latitude: lat, longitude: lon, hourly: 'temperature_2m,precipitation_probability,weather_code,wind_speed_10m,is_day', forecast_days: 2, timezone: 'auto', wind_speed_unit: 'kmh' });
+  const r = await fetch(u); if (!r.ok) throw new Error('weather');
+  const d = await r.json(), h = d.hourly;
+  return {
+    now: Date.now() + (d.utc_offset_seconds || 0) * 1000,
+    hours: h.time.map((t, i) => ({ t: Date.parse(t + 'Z'), temp: h.temperature_2m[i] ?? 15, precip: h.precipitation_probability[i] ?? 0, wind: h.wind_speed_10m[i] ?? 0, code: h.weather_code[i] ?? 0, isDay: !!h.is_day[i] })),
+  };
+}
+
+function analyzeWeather(fc, availMin) {
+  const now = fc.now, dayEnd = (Math.floor(now / DAY) + 1) * DAY;
+  // "Today" means today: a 7 AM window tomorrow is no help at 6:30 PM.
+  const up = fc.hours.filter(h => h.t + HOUR > now && h.t < dayEnd).slice(0, 14);
+  const fits = up.map(hourFit);
+  const needed = Math.max(1, Math.min(Math.ceil(availMin / 60), 3));
+  const first = up.length && now - up[0].t <= 20 * 60e3 ? 0 : 1; // don't start in an hour that's mostly gone
+  let bi = null, bm = -1;
+  for (let i = first; i <= fits.length - needed; i++) {
+    const seg = fits.slice(i, i + needed);
+    if (Math.min(...seg) >= 0.55 && seg.reduce((a, b) => a + b, 0) / needed > bm) { bi = i; bm = seg.reduce((a, b) => a + b, 0) / needed; }
+  }
+  let win = null;
+  if (bi !== null) win = { start: Math.max(up[bi].t, Math.ceil(now / 600e3) * 600e3), end: up[bi + needed - 1].t + HOUR, mean: bm };
+  const cur = up[0];
+  return { temp: cur ? Math.round(cur.temp) : 0, cond: cur ? condText(cur.code) : 'unknown', ok: !!win, win, hourly: up.map((h, i) => ({ t: h.t, fit: fits[i] })) };
+}
+
+function indoorReason(fc) {
+  const now = fc.now, dayEnd = (Math.floor(now / DAY) + 1) * DAY;
+  const n = fc.hours.filter(h => h.t + HOUR > now && h.t < dayEnd).slice(0, 8);
+  if (!n.length) return "there's no daylight left today";
+  if (n.some(h => h.code >= 95)) return 'thunderstorms are expected';
+  if (n.reduce((a, h) => a + h.precip, 0) / n.length > 50 || n.slice(0, 3).some(h => RAIN.has(h.code))) return 'rain is likely';
+  if (Math.max(...n.map(h => h.temp)) < 5) return "it's too cold";
+  if (Math.min(...n.map(h => h.temp)) > 35) return "it's too hot";
+  if (Math.max(...n.map(h => h.wind)) > 35) return "it's very windy";
+  if (!n.some(h => h.isDay)) return "it's dark out";
+  return "there isn't a long enough comfortable window";
+}
+
+/* ───────── places ───────── */
+const CAT_LABEL = { park: 'park', nature_reserve: 'nature reserve', garden: 'garden', viewpoint: 'viewpoint', water: 'waterside spot', beach: 'beach', peak: 'peak', waterfall: 'waterfall' };
+// OSM has no "quiet" or "scenic" flag, so these tags are inferred from the kind of place.
+function classify(t) {
+  if (t.leisure === 'nature_reserve') return ['nature_reserve', ['nature', 'quiet', 'scenic', 'walking', 'birdwatching', 'photography']];
+  if (t.leisure === 'park') return ['park', ['nature', 'walking', 'cycling', 'picnic', 'family']];
+  if (t.leisure === 'garden') return ['garden', ['nature', 'quiet', 'photography', 'walking']];
+  if (t.tourism === 'viewpoint') return ['viewpoint', ['scenic', 'photography']];
+  if (t.waterway === 'waterfall') return ['waterfall', ['nature', 'scenic', 'photography']];
+  if (t.natural === 'beach') return ['beach', ['water', 'scenic', 'walking', 'crowded']];
+  if (t.natural === 'water') return ['water', ['water', 'nature', 'quiet', 'scenic', 'walking', 'cycling']];
+  if (t.natural === 'peak') return ['peak', ['nature', 'scenic', 'photography']];
+  return null;
+}
+function parseOverpass(els) {
+  const out = new Map();
+  for (const el of els) {
+    const t = el.tags || {}, c = classify(t); if (!c) continue;
+    const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon; if (lat == null || lon == null) continue;
+    let name = t.name || t['name:en'];
+    if (!name) { if (c[0] !== 'viewpoint') continue; name = 'Viewpoint'; }
+    const id = `osm:${el.type || 'node'}/${el.id}`;
+    out.set(id, { id, name, lat, lon, category: c[0], tags: c[1] });
+  }
+  return [...out.values()];
+}
+async function fetchPlaces(lat, lon, radiusM) {
+  lat = +lat.toFixed(3); lon = +lon.toFixed(3);
+  const a = `(around:${radiusM},${lat},${lon})`;
+  const q = `[out:json][timeout:20];(nwr["leisure"~"^(park|nature_reserve|garden)$"]["name"]${a};nwr["tourism"="viewpoint"]${a};nwr["natural"~"^(water|beach|peak)$"]["name"]${a};nwr["waterway"="waterfall"]${a};);out center 80;`;
+  const r = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', body: new URLSearchParams({ data: q }) });
+  if (!r.ok) throw new Error('places');
+  return parseOverpass((await r.json()).elements || []);
+}
+const MOCK_PLACES = [
+  ['Willow Pond Reserve', 'nature_reserve', 0, 2.0], ['Central Green', 'park', 90, 1.2], ['Old Quarry Viewpoint', 'viewpoint', 45, 3.5],
+  ['Sunday Beach', 'beach', 180, 4.5], ['Fernhill Garden', 'garden', 270, 2.8], ['Lakeside Loop', 'water', 135, 6.0],
+];
+function mockPlaces(lat, lon, radiusM) {
+  return MOCK_PLACES.filter(p => p[3] * 1000 <= radiusM).map((p, i) => {
+    const [la, lo] = offsetPoint(lat, lon, p[2], p[3]);
+    return { id: `demo:${i}`, name: p[0], lat: la, lon: lo, category: p[1], tags: classify({ leisure: p[1] === 'nature_reserve' ? 'nature_reserve' : p[1] === 'park' ? 'park' : p[1] === 'garden' ? 'garden' : undefined, tourism: p[1] === 'viewpoint' ? 'viewpoint' : undefined, natural: ['beach', 'water'].includes(p[1]) ? p[1] : undefined })[1] };
+  });
+}
+function mockWeather() {
+  const now = Date.now() - new Date().getTimezoneOffset() * 60e3; // local wall-clock as naive ms
+  const base = Math.floor(now / HOUR) * HOUR, hours = [];
+  for (let i = 0; i < 48; i++) { const t = base + i * HOUR; hours.push({ t, temp: 22, precip: 5, wind: 9, code: 1, isDay: hh(t) >= 6 && hh(t) < 19 }); }
+  return { now, hours };
+}
+
+/* ───────── routing ───────── */
+const SPEED = { walking: 4.8, cycling: 15, driving: 30 };
+const ROUTE_URL = { walking: 'https://routing.openstreetmap.de/routed-foot', cycling: 'https://routing.openstreetmap.de/routed-bike', driving: 'https://routing.openstreetmap.de/routed-car' };
+function estimateRoute(o, d, mode) {
+  const km = haversine(o.lat, o.lon, d.lat, d.lon) * 1.3;
+  return { km: +km.toFixed(2), min: +(km / SPEED[mode] * 60).toFixed(1), geom: [[o.lat, o.lon], [d.lat, d.lon]], estimated: true };
+}
+async function getRoute(o, d, mode, demo) {
+  if (demo) return estimateRoute(o, d, mode);
+  try {
+    const r = await fetch(`${ROUTE_URL[mode]}/route/v1/driving/${o.lon},${o.lat};${d.lon},${d.lat}?overview=full&geometries=geojson`);
+    if (!r.ok) throw 0;
+    const b = (await r.json()).routes[0], step = Math.max(1, Math.floor(b.geometry.coordinates.length / 150));
+    const g = b.geometry.coordinates.filter((_, i) => i % step === 0).map(c => [c[1], c[0]]);
+    return { km: +(b.distance / 1000).toFixed(2), min: +(b.duration / 60).toFixed(1), geom: g, estimated: false };
+  } catch { return estimateRoute(o, d, mode); } // one slow router never fails the whole recommendation
+}
+
+/* ───────── ranking (swap `rank` for a learned model later) ───────── */
+const WEIGHTS = { preference_match: 3, weather_fit: 2, distance_fit: 1.5, time_fit: 2, novelty: 1, scenic_score: 1, route_quality: 1 };
+const DWELL = 25, SCENIC = { scenic: 1, water: .8, nature: .6, photography: .5 };
+const COMPONENTS = {
+  preference_match(c, x) {
+    const wanted = new Set([...x.prefs, ...x.acts]); let m = .5;
+    if (wanted.size) m = Math.min(1, c.place.tags.filter(t => wanted.has(t)).length / Math.min(wanted.size, 2));
+    const known = c.place.tags.filter(t => t.toString() in x.affinity).map(t => x.affinity[t]);
+    const aff = known.length ? .5 + .5 * known.reduce((a, b) => a + b, 0) / known.length : .5;
+    return .65 * m + .35 * aff;
+  },
+  weather_fit: (c, x) => x.wx.win ? x.wx.win.mean : 0,
+  distance_fit(c, x) { const r = c.route.km / x.km; return r <= .5 ? 1 : clamp(1 - (r - .5) * 2); },
+  time_fit(c, x) { const ratio = (2 * c.route.min + DWELL) / x.minutes; return ratio > 1 ? clamp(1 - (ratio - 1) * 3) : ratio >= .5 ? 1 : .6 + .8 * ratio; },
+  novelty: (c, x) => x.visited.has(c.place.id) ? .1 : 1,
+  scenic_score: c => Math.max(0, ...c.place.tags.map(t => SCENIC[t] || 0)) || .2,
+  route_quality(c) { if (c.route.estimated || c.route.km <= 0) return .6; return clamp((c.straight / c.route.km - .4) / .5); },
+};
+function rank(cands, x, overrides) {
+  const w = { ...WEIGHTS, ...(overrides || {}) }, total = Object.keys(COMPONENTS).reduce((a, n) => a + Math.max(0, w[n] || 0), 0) || 1;
+  return cands.map(c => {
+    const parts = {}; for (const n in COMPONENTS) parts[n] = clamp(COMPONENTS[n](c, x));
+    const score = 100 * Object.keys(parts).reduce((a, n) => a + Math.max(0, w[n] || 0) * parts[n], 0) / total;
+    return { ...c, score: +score.toFixed(1), parts };
+  }).sort((a, b) => b.score - a.score);
+}
+
+/* ───────── learning from feedback (on this device only) ───────── */
+function computeAffinity(hist) {
+  const s = {};
+  for (const e of hist) {
+    const w = (e.rating - 3) / 2;
+    for (const t of e.tags) s[t] = (s[t] || 0) + w;
+    for (const t of e.liked) s[t] = (s[t] || 0) + .5;
+    for (const t of e.disliked) s[t] = (s[t] || 0) - .5;
+  }
+  const out = {}; for (const k in s) out[k] = Math.tanh(s[k]); return out;
+}
+const visitedIds = hist => new Set(hist.filter(e => e.placeId).map(e => e.placeId));
+
+/* ───────── indoor activities ───────── */
+const CATALOG = [
+  ['sketch-window', 'creative', 'Ten-minute window sketch', 15, ['Pick one object or the view from your window.', 'Set a 10-minute timer.', 'Draw with a single pen and no erasing.', "Write today's date and one sentence about what you saw."]],
+  ['postcard', 'creative', 'Write a postcard to a friend', 20, ["Pick someone you haven't talked to in a while.", 'Write three sentences: one memory, one update, one question.', 'Photograph it and send the picture, or post the real card.']],
+  ['five-words', 'learning', 'Learn five words around one theme', 20, ['Choose a language and a theme, such as weather or food.', 'Look up five words and say each aloud three times.', 'Write one sentence using each word.', 'Test yourself again tonight.']],
+  ['local-species', 'learning', 'Meet ten local plants or birds', 25, ['Open a regional field guide or biodiversity site.', 'Pick ten species you could see within a few km.', 'Write one identifying trait for each.', 'Keep the list for your next outdoor day.']],
+  ['dots-boxes', 'games', 'Dots and boxes tournament', 20, ['Draw a 6x6 grid of dots on paper.', 'Take turns joining two neighbouring dots.', 'Whoever closes a box initials it and goes again.', 'Best of three wins.']],
+  ['jigsaw-sprint', 'games', 'Thirty-minute puzzle sprint', 30, ['Take a jigsaw or tangram set.', 'Sort edge pieces or shapes first.', 'Set a 30-minute timer and see how far you get.']],
+  ['pantry-soup', 'cooking', 'One-pot soup from what you have', 40, ['Pick one vegetable, one starch and one flavour (onion, garlic or spice).', 'Sauté the flavour, add the rest and cover with water or stock.', 'Simmer until soft, then taste and adjust salt and acid.']],
+  ['flatbread', 'cooking', 'Pan-fried flatbread', 35, ['Mix 1 cup flour, 1/2 tsp salt, 1 tbsp oil and about 1/3 cup warm water.', 'Knead for 3 minutes and rest for 10.', 'Roll thin and cook 1-2 minutes per side in a dry hot pan.']],
+  ['tea-stretch', 'relaxing', 'Slow tea and a gentle stretch', 20, ['Make a hot drink and drink it with no screen.', 'Stretch neck, shoulders and hips for 5 minutes.', 'Look out of the window for one full minute.']],
+  ['chapter-hour', 'relaxing', 'One chapter, nowhere to be', 30, ["Choose a book you've been meaning to start.", 'Silence your phone and read one chapter.', 'Note one line worth remembering.']],
+  ['blanket-fort', 'family', 'Blanket-fort story hour', 45, ['Build a fort with blankets and chairs.', 'Each person picks a favourite book or tells a made-up story.', 'Finish with a shared snack.']],
+  ['treasure-hunt', 'family', 'Indoor treasure hunt', 30, ['Hide ten small items around the home.', 'Write a one-line clue for each.', 'Time how long the hunt takes, then swap roles.']],
+  ['drawer', 'challenge', 'Declutter one drawer', 15, ['Pick the drawer you dread most.', 'Empty it onto a table and sort into keep, move and let go.', 'Put back only what earns its place.']],
+  ['photo-pick', 'challenge', 'Pick your five best photos of the month', 15, ['Scroll back through the last 30 days.', "Choose the five you'd actually show someone.", 'Save them to an album or print one.']],
+].map(([id, category, title, minutes, steps]) => ({ id, category, title, minutes, steps }));
+const INTEREST_CAT = { photography: 'creative', birdwatching: 'learning', nature: 'learning', picnic: 'cooking', quiet: 'relaxing', scenic: 'creative', walking: 'challenge', family: 'family' };
+function pickIndoor(minutes, interests, reason) {
+  const wanted = new Set(interests.map(i => INTEREST_CAT[i]).filter(Boolean));
+  let pool = CATALOG.filter(i => i.minutes <= minutes && (i.category !== 'family' || wanted.has('family')));
+  if (!pool.length) pool = [CATALOG.reduce((a, b) => a.minutes <= b.minutes ? a : b)];
+  let seed = Math.floor(Date.now() / DAY); const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296; // same pick all day
+  const scored = pool.map(i => [(wanted.has(i.category) ? 2 : 0) + rnd(), i]).sort((a, b) => b[0] - a[0]);
+  const a = scored[0][1];
+  return { ...a, why: `Staying in because ${reason}. This takes about ${a.minutes} minutes and needs almost nothing.` };
+}
+
+/* ───────── recommendation pipeline ───────── */
+async function recommend(loc, prefs, hist, demo) {
+  const fc = demo ? mockWeather() : await fetchWeather(loc.lat, loc.lon);
+  const wx = analyzeWeather(fc, prefs.minutes);
+  const indoor = reason => ({ mode: 'indoor', wx, activity: pickIndoor(prefs.minutes, prefs.interests, reason) });
+  if (!wx.ok) return indoor(indoorReason(fc));
+
+  const radius = prefs.km * 1000;
+  const places = demo ? mockPlaces(loc.lat, loc.lon, radius) : await fetchPlaces(loc.lat, loc.lon, radius);
+  const PREF_TAGS = ['nature', 'quiet', 'scenic'];
+  const prefsT = prefs.interests.filter(i => PREF_TAGS.includes(i)), acts = prefs.interests.filter(i => !PREF_TAGS.includes(i));
+  const wanted = new Set(prefs.interests);
+  const short = places.map(p => ({ p, d: haversine(loc.lat, loc.lon, p.lat, p.lon) })).filter(x => x.d <= prefs.km)
+    .map(x => ({ ...x, q: x.p.tags.filter(t => wanted.has(t)).length - x.d / prefs.km })).sort((a, b) => b.q - a.q).slice(0, 6);
+  if (!short.length) return indoor('nothing suitable is within your travel distance');
+  const routes = await Promise.all(short.map(s => getRoute(loc, s.p, prefs.mode, demo)));
+  const cands = short.map((s, i) => ({ place: s.p, route: routes[i], straight: s.d }));
+  const ranked = rank(cands, { prefs: prefsT, acts, affinity: computeAffinity(hist), visited: visitedIds(hist), wx, km: prefs.km, minutes: prefs.minutes });
+  const best = ranked[0];
+  if (best.score < 35) return indoor('nothing nearby fits your time and distance well');
+  return { mode: 'outdoor', wx, pick: best, alts: ranked.slice(1, 5), wanted: [...prefsT, ...acts], affinity: computeAffinity(hist), reason: explain(best, wx, [...prefsT, ...acts], computeAffinity(hist)) };
+}
+
+function explain(p, wx, wanted, aff) {
+  const t = p.place.tags, adj = ['quiet', 'scenic'].filter(a => t.includes(a)), label = CAT_LABEL[p.place.category] || 'spot';
+  const desc = [...adj, label].join(' '), art = 'aeiou'.includes(desc[0]) ? 'an' : 'a';
+  const head = `${p.place.name}, ${art} ${desc} ${fmtKm(p.straight)} away`;
+  const parts = [`Today's pick: ${head} (about ${Math.round(p.route.min)} min ${MODE_PHRASE[prefsNow().mode]}).`];
+  if (wx.win) parts.push(`Weather looks ${wx.win.mean >= .85 ? 'great' : wx.win.mean >= .7 ? 'good' : 'decent'} between ${fmtWin(wx.win.start, wx.win.end)}.`);
+  const matched = wanted.filter(x => t.includes(x)), liked = t.filter(x => (aff[x] || 0) > .3);
+  parts.push(matched.length ? `It matches your interest in ${andJoin(matched)}.` : liked.length ? `You've enjoyed ${andJoin(liked.slice(0, 2))} places before.` : "It's the best fit for your time and distance today.");
+  if (p.route.estimated) parts.push('Route time is an estimate.');
+  return { head, text: parts.join(' ') };
+}
+
+/* ───────── state ───────── */
+const DEFAULTS = { onboarded: false, minutes: 90, km: 5, mode: 'walking', interests: ['nature', 'quiet'], manual: null };
+let prefs = { ...DEFAULTS, ...store.get('tg.prefs', {}) };
+let hist = store.get('tg.history', []);
+let S = { tab: 'today', overlay: null, status: 'idle', rec: null, err: null, started: false, fbDone: false, sel: 0, detail: null, demo: false, step: 0, locNote: null, geoMsg: null };
+let draft = { ...prefs }, fb = { rating: 0, liked: new Set(), disliked: new Set() }, map = null, mapFn = null;
+const prefsNow = () => prefs;
+const savePrefs = () => store.set('tg.prefs', prefs), saveHist = () => store.set('tg.history', hist);
+const DEMO_LOC = { lat: 52.52, lon: 13.405 };
+
+function getDeviceLocation() {
+  return new Promise((res, rej) => {
+    if (!navigator.geolocation) return rej({ code: 'unsupported', message: "This browser can't share a location." });
+    navigator.geolocation.getCurrentPosition(p => res({ lat: +p.coords.latitude.toFixed(4), lon: +p.coords.longitude.toFixed(4) }), e => rej({
+      code: e.code === 1 ? 'denied' : 'unavailable',
+      message: e.code === 1 ? 'Location access is blocked. Allow it in your browser, or search for a place instead.' : "Couldn't get a location fix. Search for a place instead.",
+    }), { enableHighAccuracy: false, timeout: 15000, maximumAge: 600000 });
+  });
+}
+
+async function refresh() {
+  Object.assign(S, { status: 'loading', err: null, started: false, fbDone: false, sel: 0 }); render();
+  try {
+    const loc = S.demo ? DEMO_LOC : prefs.manual ? { lat: prefs.manual.lat, lon: prefs.manual.lon } : await getDeviceLocation();
+    S.rec = await recommend(loc, prefs, hist, S.demo); S.status = 'ready';
+  } catch (e) {
+    S.status = 'error';
+    S.err = e && e.message && !(e instanceof Error) ? e.message : (e?.message === 'weather' ? "The weather service didn't answer." : e?.message === 'places' ? "Nearby places didn't load. The public map server may be busy." : 'Something went wrong. Check your connection.');
+    S.errLoc = e && e.code ? true : false;
+  }
+  render();
+}
+
+/* ───────── views ───────── */
+function prefForm(p) {
+  const chips = ['nature', 'quiet', 'scenic', 'walking', 'cycling', 'photography', 'picnic', 'birdwatching'];
+  return `
+  <label for="minutes">Time available: <span id="minutes-l">${fmtDur(p.minutes)}</span></label>
+  <input id="minutes" type="range" min="30" max="480" step="30" value="${p.minutes}" data-pref="minutes">
+  <label for="km">How far: up to <span id="km-l">${fmtKm(p.km)}</span></label>
+  <input id="km" type="range" min="1" max="30" step="1" value="${p.km}" data-pref="km">
+  <label>Getting there</label>
+  <div class="chips" role="group" aria-label="Travel mode">${['walking', 'cycling', 'driving'].map(m => `<button class="chip ${p.mode === m ? 'on' : ''}" data-act="mode" data-v="${m}" aria-pressed="${p.mode === m}">${MODE_WORD[m]}</button>`).join('')}</div>
+  <label>What you like</label>
+  <div class="chips" role="group" aria-label="Interests">${chips.map(c => `<button class="chip ${p.interests.includes(c) ? 'on' : ''}" data-act="interest" data-v="${c}" aria-pressed="${p.interests.includes(c)}">${cap(c)}</button>`).join('')}</div>`;
+}
+
+function viewOnboarding() {
+  if (S.step === 0) return `
+  <div style="padding-top:12vh"><h1 style="font-size:clamp(34px,8vw,48px)">Go outside.<br>Or do something good inside.</h1>
+  <p style="margin-top:16px">Each day TouchGrass checks the weather and what is nearby, then suggests one thing to do.</p>
+  <div class="panel"><h3>Why we ask for location</h3><p class="muted" style="margin:0">Your position is used once per refresh to find weather and places nearby. It is rounded, kept in this browser, and sent only to the free map and weather services. TouchGrass has no server of its own and never tracks you.</p></div>
+  ${S.locNote ? `<p class="err">${esc(S.locNote)}</p>` : ''}
+  <button class="primary" data-act="allow">Allow approximate location</button>
+  <button data-act="skipLoc">Search for a place instead</button></div>`;
+  return `<h1>What does a good outing look like?</h1><p class="muted" style="margin-top:6px">You can change this any time in Settings.</p>${prefForm(draft)}<div style="margin-top:28px"><button class="primary" data-act="finish">Find my first adventure</button></div>`;
+}
+
+function strip(wx) {
+  if (!wx.hourly.length) return '';
+  const w = wx.win, ws = w ? Math.floor(w.start / HOUR) * HOUR : 0;
+  const bars = wx.hourly.map(h => `<i class="${w && h.t >= ws && h.t < w.end ? 'win' : h.fit > .55 ? 'ok' : ''}" style="height:${8 + 56 * h.fit}px"></i>`).join('');
+  const last = wx.hourly[wx.hourly.length - 1].t + HOUR;
+  return `<div role="img" aria-label="${w ? 'Best time to go: ' + fmtWin(w.start, w.end) : 'No good outdoor window today'}"><div class="strip">${bars}</div>
+  <div class="strip-l"><span class="muted">${fmtT(wx.hourly[0].t)} ${ampm(wx.hourly[0].t)}</span>${w ? `<b>Go ${fmtWin(w.start, w.end)}</b>` : '<span>Nothing comfortable left today</span>'}<span class="muted">${fmtT(last)} ${ampm(last)}</span></div></div>`;
+}
+
+function viewToday() {
+  if (S.status === 'idle' || S.status === 'loading') return `<div class="center"><div class="spin"></div><h2>Reading the sky</h2><p>Checking the weather and what is nearby.</p></div>`;
+  if (S.status === 'error') return `<div class="center"><h2>${S.errLoc ? 'Location needed' : "Couldn't load today"}</h2><p>${esc(S.err)}</p>
+    <div style="max-width:320px;margin:24px auto 0"><button class="primary" data-act="refresh">Try again</button><button data-act="demo">Try demo data</button>${S.errLoc ? '<button data-act="tab" data-v="settings">Search for a place</button>' : ''}</div></div>`;
+  const r = S.rec;
+  const demoNote = S.demo ? `<p class="muted">Demo data: made-up places, not your area. <a href="#" data-act="exitdemo" style="color:inherit">Use real data</a></p>` : '';
+  if (r.mode === 'outdoor') {
+    const p = r.pick;
+    return `${demoNote}<h1>${esc(r.reason.head)}</h1><div style="margin:20px 0">${strip(r.wx)}</div><p>${esc(r.reason.text)}</p>
+    <div class="panel stats"><div><b>${fmtKm(p.route.km)}</b><span>Distance</span></div><div><b>${fmtDur(p.route.min)}</b><span>${MODE_WORD[prefs.mode]}</span></div><div><b>${r.wx.temp}°C</b><span>${esc(r.wx.cond)}</span></div></div>
+    ${S.fbDone ? `<div class="panel">Logged. Refresh for another idea whenever you like.</div><button data-act="refresh">Find another</button>` : `<button class="primary" data-act="details" data-v="0">${S.started ? 'Back to your route' : 'See route'}</button><button data-act="refresh">Refresh</button>`}`;
+  }
+  const a = r.activity;
+  return `${demoNote}<p style="color:var(--tarn);font-weight:600;margin-bottom:6px">${r.wx.temp}°C, ${esc(r.wx.cond)}</p><h1>${esc(a.title)}</h1><p style="margin-top:12px">${esc(a.why)}</p>
+  <div class="panel"><h3>${cap(a.category)}, about ${a.minutes} min</h3><ol class="steps">${a.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol></div>
+  ${S.fbDone ? `<div class="panel">Logged. Refresh for another idea whenever you like.</div><button data-act="refresh">Find another</button>` : `<button class="primary" data-act="done" data-v="indoor">I did it</button><button data-act="refresh">Refresh</button>`}`;
+}
+
+function viewExplore() {
+  const r = S.rec;
+  if (!r || r.mode !== 'outdoor') return `<div class="center"><h2>Nothing to explore yet</h2><p>The map fills with nearby options on days when going outside makes sense.</p></div>`;
+  const all = [r.pick, ...r.alts], s = all[S.sel] || all[0];
+  mapFn = () => drawMap('map', all.map((a, i) => ({ ll: [a.place.lat, a.place.lon], on: i === S.sel, i, name: a.place.name })), s.route.geom);
+  return `<h2>Nearby</h2><div id="map" class="map" style="margin:12px 0"></div>
+  <div class="chips">${all.map((a, i) => `<button class="chip ${i === S.sel ? 'on' : ''}" data-act="sel" data-v="${i}">${esc(a.place.name)}</button>`).join('')}</div>
+  <div class="panel"><h3>${esc(s.place.name)}</h3><p class="muted" style="margin:0 0 12px">${fmtKm(s.route.km)}, ${fmtDur(s.route.min)} one way, match ${Math.round(s.score)}/100</p><button data-act="details" data-v="${S.sel}">Open details</button></div>`;
+}
+
+function viewHistory() {
+  if (!hist.length) return `<div class="center"><h2>No adventures yet</h2><p>Finish one from the Today tab and it will show up here.</p></div>`;
+  const out = hist.filter(e => e.kind === 'outdoor').length, places = new Set(hist.filter(e => e.placeId).map(e => e.placeId)).size;
+  return `<h2>Adventures</h2><p class="muted">${out} outdoors, ${hist.length - out} indoors, ${places} different places</p>
+  ${hist.map(e => `<div class="panel hist"><div><h3 style="margin:0">${esc(e.title)}</h3><span class="muted">${new Date(e.ts).toLocaleDateString()}</span></div><b>${e.rating}/5</b></div>`).join('')}`;
+}
+
+function viewSettings() {
+  return `<h2>Preferences</h2>${prefForm(draft)}
+  <div style="margin:20px 0"><button class="primary" data-act="save">Save and refresh</button></div>
+  <h3>Location</h3>${prefs.manual ? `<p>Using <b>${esc(prefs.manual.label)}</b>. <a href="#" data-act="usedevice" style="color:inherit">Use my device location instead</a></p>` : '<p class="muted">Using your device location. Or search for a place:</p>'}
+  <div class="row"><input type="text" id="q" placeholder="City or town" aria-label="City or town"><button data-act="search" style="max-width:110px">Search</button></div>
+  ${S.geoMsg ? `<p class="muted">${esc(S.geoMsg)}</p>` : ''}
+  <h3 style="margin-top:28px">Privacy</h3><p class="muted">Location is read once per refresh and rounded before use. Preferences and history stay in this browser; there is no TouchGrass server. Weather, place and route lookups go to Open-Meteo, OpenStreetMap's Overpass API and the OSM routing service.</p>
+  <button data-act="clear">Clear history</button>`;
+}
+
+function viewDetails() {
+  const r = S.rec, all = [r.pick, ...r.alts], s = all[S.detail], rt = s.route;
+  mapFn = () => drawMap('map', [{ ll: [s.place.lat, s.place.lon], on: true, name: s.place.name }], rt.geom);
+  const reason = S.detail === 0 ? r.reason.text : `${s.place.name} is a ${s.place.tags.slice(0, 3).join(', ')} option, ${fmtKm(s.route.km)} away.`;
+  return `<button class="back" data-act="back">‹ Back</button><h2>${esc(s.place.name)}</h2><div id="map" class="map" style="margin:12px 0"></div>
+  <div class="panel stats"><div><b>${fmtKm(rt.km)}</b><span>Distance</span></div><div><b>${fmtDur(rt.min)}</b><span>One way</span></div><div><b>${Math.round(s.score)}/100</b><span>Match</span></div></div>
+  ${rt.estimated ? '<p class="muted" style="color:var(--tarn)">Route shown is a straight-line estimate; the routing service did not answer.</p>' : ''}
+  <h3>Why this place</h3><p>${esc(reason)}</p><div class="chips">${s.place.tags.map(t => `<span class="chip">${cap(t)}</span>`).join('')}</div>
+  <div style="margin-top:20px">${S.started ? `<p>Enjoy it. Tap below when you are back.</p><button class="primary" data-act="done" data-v="outdoor">I'm back</button>` : `<button class="primary" data-act="start">Start route</button>`}</div>`;
+}
+
+function viewFeedback() {
+  const r = S.rec, o = S.fbSubject === 'outdoor', s = o ? [r.pick, ...r.alts][S.detail ?? 0] : null;
+  const title = o ? s.place.name : r.activity.title, likeable = o ? s.place.tags.filter(t => t !== 'crowded') : [];
+  const dis = { 'Too crowded': 'crowded', 'Too far': 'far', 'Not scenic': 'scenic', 'Weather was off': 'weather' };
+  return `<h1>${esc(title)}</h1><label>How was it?</label><div class="rate" role="group" aria-label="Rating">${[1, 2, 3, 4, 5].map(i => `<button class="${i <= fb.rating ? 'on' : ''}" data-act="rate" data-v="${i}" aria-label="${i} of 5">🌿</button>`).join('')}</div>
+  ${likeable.length ? `<label>What did you like?</label><div class="chips">${likeable.map(t => `<button class="chip ${fb.liked.has(t) ? 'on' : ''}" data-act="fbchip" data-k="liked" data-v="${t}">${cap(t)}</button>`).join('')}</div>` : ''}
+  ${o ? `<label>Anything off?</label><div class="chips">${Object.keys(dis).map(l => `<button class="chip ${fb.disliked.has(dis[l]) ? 'on' : ''}" data-act="fbchip" data-k="disliked" data-v="${dis[l]}">${l}</button>`).join('')}</div>` : ''}
+  <div style="margin-top:28px"><button class="primary" data-act="submit" ${fb.rating ? '' : 'disabled'}>Save</button><button data-act="back">Cancel</button></div>
+  <p class="muted" style="margin-top:12px">This stays in your browser and shapes future picks.</p>`;
+}
+
+let lastKey = '', keepY = 0;
+function render() {
+  keepY = window.scrollY;
+  const app = document.getElementById('app'); mapFn = null;
+  let html;
+  if (!prefs.onboarded) html = viewOnboarding();
+  else if (S.overlay === 'details') html = viewDetails();
+  else if (S.overlay === 'feedback') html = viewFeedback();
+  else {
+    const body = { today: viewToday, explore: viewExplore, history: viewHistory, settings: viewSettings }[S.tab]();
+    const tabs = [['today', '☀️', 'Today'], ['explore', '🗺️', 'Explore'], ['history', '🕰️', 'History'], ['settings', '⚙️', 'Settings']];
+    html = body + `<nav aria-label="Main">${tabs.map(([k, ic, l]) => `<button data-act="tab" data-v="${k}" ${S.tab === k ? 'aria-current="page"' : ''}><span aria-hidden="true">${ic}</span><br>${l}</button>`).join('')}</nav>`;
+  }
+  app.innerHTML = html;
+  if (map) { map.remove(); map = null; }
+  if (mapFn) mapFn();
+  const key = `${prefs.onboarded}|${S.overlay}|${S.tab}|${S.step}`; // keep scroll position while toggling chips on the same view
+  window.scrollTo(0, key === lastKey ? keepY : 0); lastKey = key;
+}
+
+function drawMap(id, markers, geom) {
+  const el = document.getElementById(id); if (!el) return;
+  if (typeof L === 'undefined') { el.innerHTML = '<p class="muted" style="padding:16px">The map library could not load. Route details are shown below.</p>'; return; }
+  map = L.map(el, { zoomControl: true, attributionControl: true });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' }).addTo(map);
+  const pts = [];
+  if (geom && geom.length > 1) { L.polyline(geom, { color: '#35684b', weight: 5 }).addTo(map); pts.push(...geom); }
+  for (const m of markers) { L.circleMarker(m.ll, { radius: m.on ? 11 : 8, color: '#fff', weight: 2, fillColor: m.on ? '#e0a93b' : '#35684b', fillOpacity: 1 }).addTo(map).bindTooltip(m.name); pts.push(m.ll); }
+  map.fitBounds(L.latLngBounds(pts).pad(0.25), { maxZoom: 16 });
+}
+
+/* ───────── events ───────── */
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  if (b.tagName === 'A') e.preventDefault();
+  const v = b.dataset.v, act = b.dataset.act;
+  switch (act) {
+    case 'allow': try { await getDeviceLocation(); S.locNote = null; S.step = 1; } catch (er) { S.locNote = er.message + ' You can fix this later.'; S.step = 1; } return render();
+    case 'skipLoc': S.step = 1; return render();
+    case 'mode': draft.mode = v; return render();
+    case 'interest': { const s = new Set(draft.interests); s.has(v) ? s.delete(v) : s.add(v); draft.interests = [...s]; return render(); }
+    case 'finish': prefs = { ...draft, manual: prefs.manual, onboarded: true }; savePrefs(); S.tab = 'today'; return refresh();
+    case 'tab': S.tab = v; S.overlay = null; if (v === 'settings') draft = { ...prefs }; return render();
+    case 'refresh': return refresh();
+    case 'demo': S.demo = true; return refresh();
+    case 'exitdemo': S.demo = false; return refresh();
+    case 'details': S.detail = +v; S.overlay = 'details'; return render();
+    case 'sel': S.sel = +v; return render();
+    case 'back': S.overlay = S.overlay === 'feedback' && S.fbSubject === 'outdoor' ? 'details' : null; return render();
+    case 'start': S.started = true; return render();
+    case 'done': S.fbSubject = v; fb = { rating: 0, liked: new Set(), disliked: new Set() }; S.overlay = 'feedback'; return render();
+    case 'rate': fb.rating = +v; return render();
+    case 'fbchip': { const set = fb[b.dataset.k]; set.has(v) ? set.delete(v) : set.add(v); return render(); }
+    case 'submit': {
+      const o = S.fbSubject === 'outdoor', r = S.rec, s = o ? [r.pick, ...r.alts][S.detail] : null;
+      hist.unshift({ kind: o ? 'outdoor' : 'indoor', placeId: o ? s.place.id : null, title: o ? s.place.name : r.activity.title, category: o ? s.place.category : r.activity.category,
+        tags: o ? s.place.tags : [], rating: fb.rating, liked: [...fb.liked], disliked: [...fb.disliked], ts: Date.now() });
+      saveHist(); S.fbDone = true; S.started = false; S.overlay = null; S.tab = 'today'; return render();
+    }
+    case 'save': prefs = { ...draft, manual: prefs.manual }; // location is edited separately from the sliders and chips
+      savePrefs(); S.tab = 'today'; return refresh();
+    case 'clear': if (confirm('Clear your adventure history? This also resets what TouchGrass has learned about your taste.')) { hist = []; saveHist(); render(); } return;
+    case 'usedevice': prefs.manual = null; savePrefs(); S.geoMsg = null; return render();
+    case 'search': {
+      const q = document.getElementById('q').value.trim(); if (!q) return;
+      try {
+        const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=1`), d = await r.json(), g = d.results && d.results[0];
+        if (!g) { S.geoMsg = `No place found for "${q}".`; return render(); }
+        prefs.manual = { lat: +g.latitude.toFixed(2), lon: +g.longitude.toFixed(2), label: [g.name, g.admin1, g.country].filter(Boolean).join(', ') }; savePrefs(); S.geoMsg = null;
+        if (!prefs.onboarded) { S.step = 1; }
+        return render();
+      } catch { S.geoMsg = "Couldn't search right now. Check your connection."; return render(); }
+    }
+  }
+});
+document.addEventListener('input', e => {
+  const k = e.target.dataset && e.target.dataset.pref; if (!k) return;
+  draft[k] = +e.target.value;
+  document.getElementById(k + '-l').textContent = k === 'minutes' ? fmtDur(draft.minutes) : fmtKm(draft.km);
+});
+
+if (prefs.onboarded) refresh(); else render();
+</script>
+</body>
+</html>

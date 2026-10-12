@@ -184,17 +184,23 @@ function parseOverpass(els) {
   }
   return [...out.values()];
 }
-const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+// Public Overpass servers come and go and are rate-limited per IP; an error from one often reaches the browser as a bare "Failed to fetch".
+const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
+const hostOf = u => new URL(u).host;
 async function fetchPlaces(lat, lon, radiusM) {
   lat = +lat.toFixed(3); lon = +lon.toFixed(3);
   const a = `(around:${radiusM},${lat},${lon})`;
-  const q = `[out:json][timeout:20];(nwr["leisure"~"^(park|nature_reserve|garden)$"]["name"]${a};nwr["tourism"="viewpoint"]${a};nwr["natural"~"^(water|beach|peak)$"]["name"]${a};nwr["waterway"="waterfall"]${a};);out center 80;`;
-  let last; // the public server is often busy, so fall back to a mirror
-  for (const ep of OVERPASS) {
-    try { const d = await getJson('places', ep, { method: 'POST', body: new URLSearchParams({ data: q }) }, 25000); return parseOverpass(d.elements || []); }
-    catch (e) { last = e; }
+  const q = `[out:json][timeout:15];(nwr["leisure"~"^(park|nature_reserve|garden)$"]["name"]${a};nwr["tourism"="viewpoint"]${a};nwr["natural"~"^(water|beach|peak)$"]["name"]${a};nwr["waterway"="waterfall"]${a};);out center 60;`;
+  const pref = store.get('tg.overpass', null); // try the server that worked last time first
+  const order = [...OVERPASS].sort((a, b) => (a === pref ? -1 : 0) - (b === pref ? -1 : 0));
+  const failures = [];
+  for (const ep of order) {
+    try {
+      const d = await getJson('places', ep, { method: 'POST', body: new URLSearchParams({ data: q }) }, 15000);
+      store.set('tg.overpass', ep); return parseOverpass(d.elements || []);
+    } catch (e) { failures.push(`${hostOf(ep)}: ${e.detail}`); }
   }
-  throw last;
+  throw new ServiceError('places', failures.join('; '));
 }
 const MOCK_PLACES = [
   ['Willow Pond Reserve', 'nature_reserve', 0, 2.0], ['Central Green', 'park', 90, 1.2], ['Old Quarry Viewpoint', 'viewpoint', 45, 3.5],
@@ -361,7 +367,7 @@ async function refresh() {
     S.rec = await recommend(loc, prefs, hist, S.demo); S.status = 'ready';
   } catch (e) {
     S.status = 'error'; S.errLoc = false; S.detail = null;
-    if (e instanceof ServiceError) { S.err = `Couldn't reach the ${e.service} service.`; S.detail = e.detail; }
+    if (e instanceof ServiceError) { S.err = e.service === 'places' ? "The free map-data servers didn't answer. They are shared and sometimes busy or blocked on some networks." : `Couldn't reach the ${e.service} service.`; S.detail = e.detail; }
     else if (e && e.code) { S.err = e.message; S.errLoc = true; }
     else { S.err = 'Something unexpected went wrong.'; S.detail = `${e && e.name}: ${e && e.message}`; console.error(e); }
   }
@@ -517,7 +523,7 @@ document.addEventListener('click', async e => {
       S.diag = ['Checking…']; render(); const res = [];
       const t = async (name, fn) => { const t0 = performance.now(); try { await fn(); res.push(`${name}: OK (${Math.round(performance.now() - t0)} ms)`); } catch (er) { res.push(`${name}: FAILED, ${er.detail || er.message}`); } };
       await t('Weather', () => getJson('weather', 'https://api.open-meteo.com/v1/forecast?latitude=0&longitude=0&hourly=temperature_2m&forecast_days=1', {}, 10000));
-      await t('Places', () => getJson('places', OVERPASS[0], { method: 'POST', body: new URLSearchParams({ data: '[out:json][timeout:5];node(1);out;' }) }, 10000));
+      for (const ep of OVERPASS) await t(`Places (${hostOf(ep)})`, () => getJson('places', ep, { method: 'POST', body: new URLSearchParams({ data: '[out:json][timeout:5];node(1);out;' }) }, 10000));
       await t('Routing', () => getJson('routing', `${ROUTE_URL.walking}/route/v1/driving/13.40,52.50;13.41,52.51?overview=false`, {}, 10000));
       S.diag = res; return render();
     }

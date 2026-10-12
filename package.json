@@ -1,0 +1,8 @@
+{
+  "name": "touchgrass",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Real-world activity recommender: go outside, or find something good to do inside.",
+  "scripts": { "start": "python3 -m http.server 8080 --directory public", "test": "node test-site.js" },
+  "devDependencies": { "jsdom": "^25.0.0" }
+}

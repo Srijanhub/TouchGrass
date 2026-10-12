@@ -191,9 +191,13 @@ async function fetchPlaces(lat, lon, radiusM) {
   lat = +lat.toFixed(3); lon = +lon.toFixed(3);
   const a = `(around:${radiusM},${lat},${lon})`;
   const q = `[out:json][timeout:15];(nwr["leisure"~"^(park|nature_reserve|garden)$"]["name"]${a};nwr["tourism"="viewpoint"]${a};nwr["natural"~"^(water|beach|peak)$"]["name"]${a};nwr["waterway"="waterfall"]${a};);out center 60;`;
+  const failures = [];
+  try { // our own serverless proxy (Vercel): server-side requests avoid per-network blocks and are cached
+    const d = await getJson('places', `/api/places?lat=${lat}&lon=${lon}&r=${radiusM}`, {}, 35000);
+    return parseOverpass(d.elements || []);
+  } catch (e) { failures.push(`proxy: ${e.detail}`); } // absent on GitHub Pages / local: fall through to direct
   const pref = store.get('tg.overpass', null); // try the server that worked last time first
   const order = [...OVERPASS].sort((a, b) => (a === pref ? -1 : 0) - (b === pref ? -1 : 0));
-  const failures = [];
   for (const ep of order) {
     try {
       const d = await getJson('places', ep, { method: 'POST', body: new URLSearchParams({ data: q }) }, 15000);
@@ -523,6 +527,7 @@ document.addEventListener('click', async e => {
       S.diag = ['Checking…']; render(); const res = [];
       const t = async (name, fn) => { const t0 = performance.now(); try { await fn(); res.push(`${name}: OK (${Math.round(performance.now() - t0)} ms)`); } catch (er) { res.push(`${name}: FAILED, ${er.detail || er.message}`); } };
       await t('Weather', () => getJson('weather', 'https://api.open-meteo.com/v1/forecast?latitude=0&longitude=0&hourly=temperature_2m&forecast_days=1', {}, 10000));
+      await t('Places (own proxy /api/places)', () => getJson('places', '/api/places?lat=0&lon=0&r=500', {}, 35000));
       for (const ep of OVERPASS) await t(`Places (${hostOf(ep)})`, () => getJson('places', ep, { method: 'POST', body: new URLSearchParams({ data: '[out:json][timeout:5];node(1);out;' }) }, 10000));
       await t('Routing', () => getJson('routing', `${ROUTE_URL.walking}/route/v1/driving/13.40,52.50;13.41,52.51?overview=false`, {}, 10000));
       S.diag = res; return render();
